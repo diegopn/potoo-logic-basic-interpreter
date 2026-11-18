@@ -1,23 +1,29 @@
+<p align="center">
+  <img src="https://diegopn.github.io/potoo-site/src/assets/images/language-interpreter-icon.svg?v=1c651ca7" alt="Potoo IDE language interpreter icon" width="120" />
+</p>
+
 <h1 align="center">Logic Basic Interpreter</h1>
 
-<p align="center">An independent Rust library and command-line runner for the documented Logic Basic 7.0 programming language.</p>
+<p align="center">An independent Rust interpreter library and CLI for the Logic Basic programming language.</p>
 
 <p align="center">
-  <a href="https://diegopn.github.io/potoo-site/">Potoo website</a> ·
-  <a href="https://diegopn.github.io/potoo-site/manual/logic-basic/">Potoo IDE Logic Basic manual</a> ·
-  <a href="https://github.com/diegopn/potoo-logic-basic-interpreter/releases">Releases</a>
+  <a href="https://github.com/diegopn/potoo-logic-basic-interpreter/releases/latest">Download</a> ·
+  <a href="https://diegopn.github.io/potoo-site/">Website</a> ·
+  <a href="https://diegopn.github.io/potoo-site/manual/logic-basic/">User manual</a>
 </p>
 
 <p align="center">
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white"></a>
   <a href="https://doc.rust-lang.org/cargo/"><img alt="Cargo" src="https://img.shields.io/badge/Cargo-DEA584?style=for-the-badge&logo=rust&logoColor=white"></a>
   <img alt="Rust library" src="https://img.shields.io/badge/Rust_library-4A86CF?style=for-the-badge">
-  <img alt="Command-line interface" src="https://img.shields.io/badge/CLI-6A4C93?style=for-the-badge">
+  <img alt="CLI" src="https://img.shields.io/badge/CLI-6A4C93?style=for-the-badge">
 </p>
 
-Logic Basic is a programming language, not a pseudolanguage. This project implements its documented 7.0 command language as a Rust library and a standalone command-line runner. The library is designed for embedding in Potoo IDE, where a host integration can provide the visual interface. This repository does not include a graphical interface.
+Originally developed as part of the Potoo IDE project, this interpreter is an independent Rust software package intended to be distributed separately from the IDE. It can be embedded as a library in other Rust projects or run as a standalone command-line tool on Linux, macOS, and Windows.
 
-## Language references
+Logic Basic is a programming language, not a pseudolanguage. This interpreter implements the documented 7.0 command language; its host API lets Potoo IDE provide the visual interface.
+
+## Original language references
 
 - [Curso Básico de Logic Basic 7.0, Eleusmário Mariano Rabelo](https://pt.scribd.com/document/420235581/Manual-do-Logic-Basic) — primary reference for the documented language.
 - [Potoo IDE Logic Basic manual](https://diegopn.github.io/potoo-site/manual/logic-basic/) — supplemental reference for using Logic Basic in Potoo IDE.
@@ -38,7 +44,7 @@ FimSe
 FimPrograma
 ```
 
-## Install the command-line runner
+## Standalone command-line runner
 
 ### Install a release build
 
@@ -126,42 +132,9 @@ FimPrograma
 
 For IDE integration, implement the public `Host` trait and call `run_with_host(source, &mut host)`. Host requests are typed operations carrying ordered arguments, block rows, and the current `Window`. Implement only the capabilities available in the embedding application. The trait also provides callbacks for text-grid changes and execution checkpoints, plus methods for memory snapshots, loaded programs, and logical database records. Unsupported capabilities return source-located execution errors. `FimJanela` returns `None`; normal completion and `FimPrograma` return the final window.
 
-## Supported language features
+Visual, media, printing, memory snapshot, and database storage operations are sent to the embedding host as typed requests. The CLI focuses on text input and output; physical `.LBA` database file compatibility is not claimed.
 
-### Source and values
-
-- Scalar and one-dimensional array declarations use `Memoria`. Arrays use zero-based indices and support indexed assignment and `ProcureMatriz`.
-- `ApagaMemoria` removes a declared memory. `ReorganizaMemoria` has no visible effect because named memory storage has no exposed positional slots.
-- Values include text, numbers, logical values (`SIM` and `NAO`), colors, objects, sounds, and arrays.
-- Assignment uses `=`. Arithmetic supports `+`, `-`, `*`, `/`, and `%`; updates support `++`, `--`, `+=`, and `-=`.
-- Apostrophes start comments. Semicolons separate commands on one physical line. Commands and identifiers are matched without regard to ASCII letter case.
-- Decimal values in assignments use a comma, such as `2,5`. Conditions may compare a number with its quoted decimal form, such as `Se Total = "2,5"`.
-
-### Control flow and text
-
-- `Se`, `CasoContrario`, and `FimSe` provide conditions. A condition may use repeated `E` or repeated `OU`; the documented syntax does not mix both operators on one `Se` line.
-- `VaPara`, labels, `FimPrograma`, and `FimJanela` provide jumps and termination.
-- `Execute Nome()` and `Retorne` call named routines, including recursive routines.
-- `Posicione`, `Escreva`, `LimpaJanela`, `EntraTexto`, `Mensagem`, and `Aguarde` support text-window output, input, messages, and waits.
-- Built-in functions include `Unir`, `Separe`, `Alinha`, `Formata`, `RGB`, `Aleatorio`, `Data`, `Hora`, and `TestaMouse`. `ProcureMatriz` searches an array and returns its zero-based index, or `-1` when there is no match.
-
-### Host-backed capabilities
-
-- `Janela`, `Fundo`, `Fonte`, `Menu`, `Botao`, `Componente`, `Box*`, `Cria Objeto/Som`, drawing, transparency, video, and sound commands are forwarded to the host as typed operations.
-- `Imp` commands send print operations to the host.
-- `GravaMemoria` and `CarregaMemoria` use host-provided snapshots. The host defines the physical file format.
-- `BD ... FimBD` defines database fields. The interpreter implements logical records, field values, ordering, `Procure` searches, deletion, record counts, and compaction. The host owns opening, saving, closing, path resolution, and physical storage.
-- `CarregaPrograma` loads and executes another source file through the host.
-
-## Runtime limits and compatibility notes
-
-- Array storage is limited to 1,000,000 elements across one execution. A text grid is limited to 1,000,000 cells. `Alinha` is limited to a width of 1,000,000 characters.
-- The default text grid has 27 rows and 79 columns, with zero-based coordinates. Each character occupies one cell. `Escreva` joins its arguments without adding spaces, writes from the cursor, then advances to the next row.
-- `Janela Resolucao` can resize the text grid. Hosts receive the updated grid and cursor through `window_changed`.
-- The original `.LBA` database format and original executable were not available for compatibility checks. Database hosts exchange logical records through the public `Host` API; this project does not claim byte-level compatibility with `.LBA` files.
-- Text wrapping, clipping, and cursor behavior beyond the documented examples could not be confirmed against the original runtime.
-
-## Development and tests
+## Development
 
 Format, check, and test the project with:
 
@@ -170,8 +143,6 @@ cargo fmt --all -- --check
 cargo check --locked
 cargo test --locked
 ```
-
-Integration tests in `tests/` exercise the public runtime and the actual CLI process, including host requests, text input, arrays, routines, memory snapshots, loaded programs, source diagnostics, and window behavior.
 
 ## Support
 
