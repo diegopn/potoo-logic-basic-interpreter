@@ -175,10 +175,13 @@ fn execute_program(
                 let target = evaluate_operand(target, &memories, &databases, host, &window)
                     .map_err(error)?;
                 let result = match memories.get(name) {
-                    Some(Value::Array(items)) => items
-                        .iter()
-                        .position(|value| value.as_ref() == Some(&target))
-                        .map_or(-1.0, |index| index as f64),
+                    Some(Value::Array(items)) => {
+                        let empty = Value::Text(String::new());
+                        items
+                            .iter()
+                            .position(|value| value.as_ref().unwrap_or(&empty) == &target)
+                            .map_or(-1.0, |index| index as f64)
+                    }
                     Some(_) => return Err(error(format!("{name} is not an array memory"))),
                     None => return Err(error(format!("unknown matrix {name}"))),
                 };
@@ -1349,11 +1352,11 @@ fn evaluate_operand(
         syntax::Atom::IndexedMemory(name, index) => {
             let index = evaluate(index, memories, databases, host, window)?.index()?;
             match memories.get(name) {
-                Some(Value::Array(items)) => items
+                Some(Value::Array(items)) => Ok(items
                     .get(index)
                     .ok_or_else(|| format!("array index {index} is out of range"))?
                     .clone()
-                    .ok_or_else(|| format!("array index {index} has not been assigned")),
+                    .unwrap_or_else(|| Value::Text(String::new()))),
                 Some(_) => Err(format!("{name} is not an array memory")),
                 None => Err(format!("unknown array memory {name}")),
             }

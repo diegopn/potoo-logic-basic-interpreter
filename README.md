@@ -4,7 +4,7 @@
 
 <h1 align="center">Logic Basic Interpreter</h1>
 
-<p align="center">An independent Rust interpreter library and CLI for the Logic Basic programming language.</p>
+<p align="center">An independent Rust interpreter library and CLI for the Logic Basic 7.0 language.</p>
 
 <p align="center">
   <a href="https://github.com/diegopn/potoo-logic-basic-interpreter/releases/latest">Download</a> ·
@@ -21,7 +21,7 @@
 
 Originally developed as part of the Potoo IDE project, this interpreter is an independent Rust software package intended to be distributed separately from the IDE. It can be embedded as a library in other Rust projects or run as a standalone command-line tool on Linux, macOS, and Windows.
 
-Logic Basic is a programming language, not a pseudolanguage. This interpreter implements the documented 7.0 command language; its host API lets Potoo IDE provide the visual interface.
+Logic Basic 7.0 is a beginner-oriented BASIC programming language. This project targets the command language documented in the 7.0 manual; it does not claim compatibility with other releases or configurable profiles. Visual and environment-dependent operations are exposed as typed `Host` requests for an embedding application to implement.
 
 The available introductory manual mentions a database function named `Entre`, but does not define its call syntax or argument rules. That function is not included in the implemented subset.
 
@@ -50,14 +50,14 @@ FimPrograma
 
 ### Install a release build
 
-When binary packages are available, download the archive for your platform from [GitHub Releases](https://github.com/diegopn/potoo-logic-basic-interpreter/releases), extract it, and place the `potoo-logic-basic` executable somewhere on your `PATH`.
+Download the archive for your platform from [GitHub Releases](https://github.com/diegopn/potoo-logic-basic-interpreter/releases), extract it, and place the `potoo-logic-basic` executable somewhere on your `PATH`. Published binaries target Linux x86_64 GNU, Windows x86_64 MSVC, and macOS Intel x86_64. No arm64 binary is published.
 
 ### Build and install from source
 
 Install [Rust and Cargo](https://www.rust-lang.org/tools/install) first. This project requires Rust 1.93 or newer.
 
 ```sh
-git clone --branch develop https://github.com/diegopn/potoo-logic-basic-interpreter.git
+git clone --branch main https://github.com/diegopn/potoo-logic-basic-interpreter.git
 cd potoo-logic-basic-interpreter
 cargo install --path . --locked --bin potoo-logic-basic
 ```
@@ -80,7 +80,7 @@ Run a source file by passing its path:
 potoo-logic-basic saudacao.lbc
 ```
 
-The runner reads UTF-8 source files, sends text prompts to standard error, reads `EntraTexto` and `Aguarde` key input from standard input, and prints the final text window to standard output. `Mensagem` is written to standard error. File and execution errors include the source line when available.
+The runner reads UTF-8 source files, sends text prompts to standard error, reads `EntraTexto` and `Aguarde` key input from standard input, and prints the final text window to standard output. `Mensagem` is written to standard error. File and execution errors include the source line when available. Legacy source encodings are not decoded.
 
 ```sh
 potoo-logic-basic --help
@@ -136,6 +136,19 @@ For IDE integration, implement the public `Host` trait and call `run_with_host(s
 
 Visual, media, printing, memory snapshot, and database storage operations are sent to the embedding host as typed requests. The CLI focuses on text input and output; physical `.LBA` database file compatibility is not claimed.
 
+## Compatibility scope and limits
+
+The compatibility target is the documented Logic Basic 7.0 command language in the primary reference above. The original manual describes a Windows-oriented BASIC programming language. A verified Logic Basic 7.0 runtime or original fixture is not available for differential testing, so undocumented behavior is not presented as confirmed parity.
+
+- `ReorganizaMemoria` compacts internal memory slots according to the manual. This interpreter addresses memories by name, and its snapshot API exposes named values rather than slot numbers; the command therefore has no observable effect through this language/API. The original allocator's internal behavior is unverified.
+- The manual documents zero-based matrix indices and empty contents for unset elements. This implementation limits all declared and loaded matrix storage to 1,000,000 elements in total; that safety limit is not specified by the manual.
+- `Separe` uses one-based Unicode scalar positions. The manual gives character-based examples but does not define Unicode normalization, grapheme clusters, or legacy encodings.
+- The text grid is 27 by 79 cells by default, as documented. In this implementation `Escreva` advances one row after each command, clips text at the right edge without wrapping, and reports the resulting cursor through `Host`; the manual does not specify those boundary details, so they have not been compared with the original runtime.
+- `Aleatorio` returns an integer in the inclusive range from zero to its argument. The CLI accepts integer maxima through `2^53 - 1` and uses a time/process-seeded generator without a seed command; the original sequence and seeding behavior are not documented. An embedding host can supply deterministic values for tests.
+- Recursive routines use an explicit return stack with no fixed language-level depth limit. The manual confirms recursion but does not specify a maximum depth.
+- The manual confirms the `.LBA` extension and how `AbreBD` chooses a filename, but does not describe its bytes or record encoding. Hosts receive logical records; physical `.LBA` interoperability is unverified.
+- The manual mentions `Entre` as a database-field argument but does not provide a callable signature or argument rules, so this function is not implemented.
+
 ## Development
 
 Format, check, and test the project with:
@@ -152,7 +165,7 @@ If this project is useful to you, you can [sponsor its maintainer](https://githu
 
 ## License and project policies
 
-The available author manual is marked all rights reserved. The original executable, source code, and separate license terms could not be verified. This independent Rust project is licensed under GPL-3.0-or-later.
+The available author manual is marked all rights reserved. No authenticated Logic Basic 7.0 executable, source code, or separate license terms were available to this project for verification. This independent Rust project is licensed under GPL-3.0-or-later.
 
 - [Code of conduct](CODE_OF_CONDUCT.md)
 - [Contributing](CONTRIBUTING.md)

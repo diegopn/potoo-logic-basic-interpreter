@@ -169,6 +169,48 @@ fn documented_text_grid_coordinates_and_argument_joining_are_preserved() {
 }
 
 #[test]
+fn text_grid_advances_after_each_write_and_clips_at_the_row_boundary() {
+    let mut host = TestHost::default();
+    let window = run_with_host(
+        "Escreva \"primeiro\"\nEscreva \"segundo\"\nPosicione 2, 77\nEscreva \"ABCD\"\nFundo = \"fundo.bmp\"\nFimPrograma",
+        &mut host,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(cell_text(&window, 0, 79), "primeiro");
+    assert_eq!(cell_text(&window, 1, 79), "segundo");
+    assert_eq!(window.cell(2, 77), Some('A'));
+    assert_eq!(window.cell(2, 78), Some('B'));
+    assert_eq!(window.cell(3, 0), Some(' '));
+    let background = host
+        .requests
+        .iter()
+        .find(|request| request.operation == Operation::Background)
+        .unwrap();
+    assert_eq!(background.window_cursor, (3, 0));
+}
+
+#[test]
+fn clearing_the_grid_preserves_the_write_cursor() {
+    let mut host = TestHost::default();
+    let window = run_with_host(
+        "Posicione 4, 5\nEscreva \"apagado\"\nLimpaJanela\nFundo = \"fundo.bmp\"\nFimPrograma",
+        &mut host,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!((0..window.rows()).all(|row| cell_text(&window, row, window.columns()).is_empty()));
+    let background = host
+        .requests
+        .iter()
+        .find(|request| request.operation == Operation::Background)
+        .unwrap();
+    assert_eq!(background.window_cursor, (5, 0));
+}
+
+#[test]
 fn message_joins_multiple_values_before_sending_the_host_request() {
     let mut host = TestHost::default();
     let result = run_with_host(
@@ -211,6 +253,63 @@ fn array_lookup_returns_zero_based_index_and_missing_value_returns_minus_one() {
 }
 
 #[test]
+fn array_indices_reject_negative_fractional_and_out_of_range_positions() {
+    let cases = [
+        (
+            "Memoria Itens(2)\nItens(2) = \"fora\"",
+            "array index 2 is out of range",
+        ),
+        (
+            "Memoria Itens(2)\nEscreva Itens(2)",
+            "array index 2 is out of range",
+        ),
+        (
+            "Memoria Itens(2)\nEscreva Itens(-1)",
+            "array index must be a nonnegative integer",
+        ),
+        (
+            "Memoria Itens(2)\nEscreva Itens(1,5)",
+            "array index must be a nonnegative integer",
+        ),
+    ];
+
+    for (source, expected_error) in cases {
+        let result = run(source, |_, _| {
+            unreachable!("program does not request input")
+        });
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains(expected_error),
+            "unexpected error for {source:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn undeclared_array_elements_have_empty_text_content() {
+    let window = run(
+        "Memoria Nomes(2)\nNomes(0) = \"Ana\"\nEscreva \"<\", Nomes(1), \">\"\nFimPrograma",
+        |_, _| unreachable!("program does not request input"),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(cell_text(&window, 0, 79), "<>");
+}
+
+#[test]
+fn separe_counts_accented_text_by_character_not_utf8_byte() {
+    let window = run(
+        "Memoria Letra\nLetra = Separe \"João\", 3, 1\nEscreva Letra\nFimPrograma",
+        |_, _| unreachable!("program does not request input"),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(cell_text(&window, 0, 79), "ã");
+}
+
+#[test]
 fn string_builtins_join_slice_align_and_format_values() {
     let window = run(
         "Memoria Junto, Parte, Resto, Direita, Esquerda, Formatado\nJunto = Unir \"Logic\", \" Basic\"\nParte = Separe Junto, 7, 5\nResto = Separe Junto, 7\nDireita = Alinha \"oi\", 4, DIR\nEsquerda = Alinha \"oi\", 4, ESQ\nFormatado = Formata 7, \"000\"\nEscreva Parte, \"|\", Resto, \"|\", Direita, \"|\", Esquerda, \"|\", Formatado\nFimPrograma",
@@ -232,6 +331,18 @@ fn named_routine_returns_to_the_call_site() {
     .unwrap();
 
     assert_eq!(cell_text(&window, 0, 79), "1");
+}
+
+#[test]
+fn assigning_a_memory_copies_its_value_for_a_named_routine() {
+    let window = run(
+        "Memoria Original, Copia\nOriginal = \"antes\"\nCopia = Original\nOriginal = \"depois\"\nExecute MostraCopia()\nFimPrograma\nMostraCopia()\nEscreva Copia\nRetorne",
+        |_, _| unreachable!("program does not request input"),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(cell_text(&window, 0, 79), "antes");
 }
 
 #[test]
@@ -488,6 +599,42 @@ fn memory_snapshot_load_overwrites_matches_and_preserves_other_named_values() {
 }
 
 #[test]
+fn unassigned_snapshot_array_cells_read_as_empty_text() {
+    let mut host = TestHost {
+        loaded_memories: Some(BTreeMap::from([(
+            "ITENS".to_owned(),
+            HostMemory::Array(vec![None, Some(HostValue::Text("Ana".into()))]),
+        )])),
+        ..TestHost::default()
+    };
+    let result = run_with_host(
+        "Memoria Itens(2), Conteudo\nCarregaMemoria \"snapshot.mem\"\nConteudo = Itens(0)\nEscreva \"<\", Conteudo, \">\"\nFimPrograma",
+        &mut host,
+    );
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(cell_text(&result.unwrap().unwrap(), 0, 79), "<>");
+}
+
+#[test]
+fn procure_matriz_matches_unassigned_snapshot_cells_as_empty_text() {
+    let mut host = TestHost {
+        loaded_memories: Some(BTreeMap::from([(
+            "ITENS".to_owned(),
+            HostMemory::Array(vec![None, Some(HostValue::Text("Ana".into()))]),
+        )])),
+        ..TestHost::default()
+    };
+    let result = run_with_host(
+        "Memoria Itens(2), Posicao\nCarregaMemoria \"snapshot.mem\"\nPosicao = ProcureMatriz Itens, \"\"\nEscreva Posicao\nFimPrograma",
+        &mut host,
+    );
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(cell_text(&result.unwrap().unwrap(), 0, 79), "0");
+}
+
+#[test]
 fn missing_memory_snapshot_leaves_existing_values_unchanged() {
     let mut host = TestHost::default();
     let result = run_with_host(
@@ -504,14 +651,22 @@ fn missing_memory_snapshot_leaves_existing_values_unchanged() {
 
 #[test]
 fn reorganize_memories_has_no_visible_effect_on_named_arrays_or_snapshots() {
+    let mut baseline_host = TestHost::default();
+    let baseline = run_with_host(
+        "Memoria Removida(2), Nomes(2)\nNomes(0) = \"Ana\"\nNomes(1) = \"Bia\"\nApagaMemoria Removida\nGravaMemoria \"memorias.mem\"\nFimPrograma",
+        &mut baseline_host,
+    );
+    assert!(baseline.is_ok(), "{baseline:?}");
+    let baseline = baseline_host.saved_memories.unwrap().1;
+
     let mut host = TestHost::default();
     let result = run_with_host(
         "Memoria Removida(2), Nomes(2)\nNomes(0) = \"Ana\"\nNomes(1) = \"Bia\"\nApagaMemoria Removida\nReorganizaMemoria\nGravaMemoria \"memorias.mem\"\nFimPrograma",
         &mut host,
     );
-
     assert!(result.is_ok(), "{result:?}");
     let snapshot = host.saved_memories.unwrap().1;
+    assert_eq!(snapshot, baseline);
     assert!(!snapshot.contains_key("REMOVIDA"));
     assert_eq!(
         snapshot.get("NOMES"),
@@ -788,6 +943,16 @@ fn recursive_routines_and_labels_follow_their_call_and_jump_targets() {
 }
 
 #[test]
+fn recursive_routines_use_an_explicit_return_stack_beyond_shallow_depths() {
+    let result = run(
+        "Memoria N\nN = 1024\nExecute Contagem()\nFimPrograma\nContagem()\nSe N > 0\nN--\nExecute Contagem()\nFimSe\nRetorne",
+        |_, _| unreachable!("program does not request input"),
+    );
+
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
 fn documented_arithmetic_comparison_and_logical_operators_are_distinct() {
     let window = run(
         "Memoria X, Soma, Produto, Divisao, Resto, Atualizado\nX = 8\nSoma = 2 + 3 * 4\nProduto = 5 * 3\nDivisao = 8 / 2\nResto = 10 % 4\nAtualizado = 5\nAtualizado += 2\nAtualizado -= 1\nAtualizado++\nAtualizado--\nSe Soma = 14 E Produto >= 15\nEscreva \"A\"\nFimSe\nSe Divisao <> 3 OU Resto = 2\nEscreva \"B\"\nFimSe\nSe X < 9\nEscreva \"C\"\nFimSe\nSe X <= 8\nEscreva \"D\"\nFimSe\nSe X > 7\nEscreva \"E\"\nFimSe\nSe X >= 8\nEscreva \"F\"\nFimSe\nEscreva Atualizado\nFimPrograma",
@@ -803,6 +968,19 @@ fn documented_arithmetic_comparison_and_logical_operators_are_distinct() {
     assert_eq!(cell_text(&window, 4, 79), "E");
     assert_eq!(cell_text(&window, 5, 79), "F");
     assert_eq!(cell_text(&window, 6, 79), "6");
+}
+
+#[test]
+fn text_and_logical_values_use_their_own_comparison_semantics() {
+    let window = run(
+        "Se \"João\" = \"João\" E Sim = Sim\nEscreva \"true\"\nCasoContrario\nEscreva \"false\"\nFimSe\nSe Sim <> Nao\nEscreva \"|logical\"\nFimSe\nFimPrograma",
+        |_, _| unreachable!("program does not request input"),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(cell_text(&window, 0, 79), "true");
+    assert_eq!(cell_text(&window, 1, 79), "|logical");
 }
 
 #[test]
@@ -1091,6 +1269,36 @@ fn menu_selection_is_returned_as_text() {
     );
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(cell_text(&result.unwrap().unwrap(), 0, 79), "Um");
+}
+
+#[test]
+fn menus_accept_ten_choices_and_reject_an_eleventh() {
+    let choices = (1..=10)
+        .map(|choice| format!("\"Opção {choice}\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!("Menu \"Escolha\"\n{choices}\nFimMenu\nFimPrograma");
+    let mut host = TestHost {
+        responses: VecDeque::from([HostValue::Text("Opção 10".into())]),
+        ..TestHost::default()
+    };
+
+    let result = run_with_host(&source, &mut host);
+
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(host.requests[0].rows.len(), 10);
+
+    let choices = (1..=11)
+        .map(|choice| format!("\"Opção {choice}\""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source = format!("Menu \"Escolha\"\n{choices}\nFimMenu\nFimPrograma");
+    let mut host = TestHost::default();
+
+    let result = run_with_host(&source, &mut host);
+
+    assert!(result.is_err(), "accepted a menu with eleven choices");
+    assert!(host.requests.is_empty());
 }
 
 #[test]

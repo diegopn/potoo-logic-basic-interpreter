@@ -47,6 +47,7 @@ impl Value {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Memory {
     Scalar(Value),
+    /// `None` marks an unassigned slot; language reads and searches treat it as empty text.
     Array(Vec<Option<Value>>),
 }
 
