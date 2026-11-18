@@ -14,4 +14,4 @@ For non-security issues, see [CONTRIBUTING.md](CONTRIBUTING.md). For conduct con
 
 ## Security boundaries
 
-The repository currently contains only a crate scaffold and does not execute Logic Basic source. This policy will be updated with the runtime boundaries and resource limits before source execution is implemented. When execution is introduced, hosts running untrusted source should apply process isolation; resource limits alone are not an operating-system sandbox.
+Logic Basic source runs in the process that calls the interpreter. It does not create an operating-system sandbox or enforce general CPU or memory quotas. The CLI reads source and loaded program files using the process's permissions. An embedding `Host` may provide additional file, memory, database, or interactive services, which also use the permissions granted to that application. Array and window-size limits are implementation guards, not isolation. Run untrusted source in a restricted process with operating-system access and resource limits, and expose only the host services it needs.
