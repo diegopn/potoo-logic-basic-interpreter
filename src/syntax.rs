@@ -17,7 +17,7 @@ pub(crate) enum Command {
     Position(Operand, Operand),
     Write(Vec<Operand>),
     Clear,
-    Message(Operand),
+    Message(Vec<Operand>),
     Wait(Vec<Operand>),
     Host(Operation, Vec<Operand>),
     HostAssign(String, Operation, Vec<Operand>),
@@ -295,18 +295,22 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
                 Command::Write(items)
             }
             "LIMPAJANELA" => Command::Clear,
-            "MENSAGEM" => Command::Message(
-                parser
-                    .operand(OperandContext::Argument, &memories)
-                    .map_err(error)?,
-            ),
+            "MENSAGEM" => {
+                let arguments = parser
+                    .arguments(OperandContext::Output, &memories)
+                    .map_err(error)?;
+                if arguments.is_empty() {
+                    return Err(error("Mensagem requires at least one value".into()));
+                }
+                Command::Message(arguments)
+            }
             "AGUARDE" => {
                 let arguments = if parser.tokens.is_empty() {
                     Vec::new()
                 } else {
                     vec![
                         parser
-                            .operand(OperandContext::Assignment, &memories)
+                            .operand(OperandContext::Wait, &memories)
                             .map_err(error)?,
                     ]
                 };
@@ -388,12 +392,11 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
                         return Err(error(format!("unsupported printer command {command}")));
                     }
                 };
-                Command::Host(
-                    operation,
-                    parser
-                        .arguments(OperandContext::Output, &memories)
-                        .map_err(error)?,
-                )
+                let arguments = parser
+                    .arguments(OperandContext::Output, &memories)
+                    .map_err(error)?;
+                validate_host_argument_count(operation, arguments.len()).map_err(error)?;
+                Command::Host(operation, arguments)
             }
             "BOTAO" if parser.keyword("Remove") => {
                 Command::Host(Operation::RemoveButtons, Vec::new())
@@ -404,9 +407,12 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
                     "BOTAO" => (Operation::Buttons, "FIMBOTAO"),
                     _ => (Operation::DatabaseDefine, "FIMBD"),
                 };
-                let header = parser
-                    .arguments(OperandContext::Output, &memories)
-                    .map_err(error)?;
+                let header = if operation == Operation::DatabaseDefine {
+                    parser.arguments_with_whitespace(OperandContext::Output, &memories)
+                } else {
+                    parser.arguments(OperandContext::Output, &memories)
+                }
+                .map_err(error)?;
                 let close_index = commands
                     .iter()
                     .enumerate()
@@ -453,10 +459,23 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
                         }
                     }
                     Operation::Buttons => {
-                        if header.len() > 1 || rows.is_empty() {
+                        let special = matches!(
+                            header.as_slice(),
+                            [Operand {
+                                value: Atom::Literal(Value::Text(kind)),
+                                ..
+                            }] if kind.eq_ignore_ascii_case("ESPECIAL")
+                        );
+                        if (!header.is_empty() && !special) || rows.is_empty() {
                             return Err(error("Botao requires button definitions".into()));
                         }
-                        if rows.iter().any(|row| !(4..=6).contains(&row.len())) {
+                        if special && rows.iter().any(|row| row.len() != 4) {
+                            return Err(error(
+                                "Botao Especial definitions require a label, row, column, and type"
+                                    .into(),
+                            ));
+                        }
+                        if !special && rows.iter().any(|row| !(5..=6).contains(&row.len())) {
                             return Err(error(
                                 "Botao definitions require a label, position, size, and optional image".into(),
                             ));
@@ -525,12 +544,11 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
             "ABREBD" | "FECHABD" | "ADICIONAREGISTRO" | "LEREGISTRO" | "ORDEMBD"
             | "EXCLUIREGISTRO" | "LIMPABD" => {
                 let operation = host_operation(&name).expect("database operation mapping");
-                Command::Database(
-                    operation,
-                    parser
-                        .arguments(OperandContext::Output, &memories)
-                        .map_err(error)?,
-                )
+                let arguments = parser
+                    .arguments_with_whitespace(OperandContext::Output, &memories)
+                    .map_err(error)?;
+                validate_database_argument_count(operation, arguments.len()).map_err(error)?;
+                Command::Database(operation, arguments)
             }
             "GRAVAMEMORIA" => Command::SaveMemories(
                 parser
@@ -567,10 +585,20 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
             }
             _ if memories.contains(&name) => parser.assignment(name, &memories).map_err(error)?,
             _ if let Some(operation) = host_operation(&name) => {
-                parser.take(Token::Symbol("="));
-                let arguments = parser
-                    .arguments(OperandContext::Output, &memories)
-                    .map_err(error)?;
+                if operation == Operation::Background {
+                    if !parser.take(Token::Symbol("=")) {
+                        return Err(error("Fundo requires = before its image path".into()));
+                    }
+                } else {
+                    parser.take(Token::Symbol("="));
+                }
+                let arguments = if operation == Operation::ConfigureWindow {
+                    parser.window_arguments(OperandContext::Output, &memories)
+                } else {
+                    parser.arguments(OperandContext::Output, &memories)
+                }
+                .map_err(error)?;
+                validate_host_argument_count(operation, arguments.len()).map_err(error)?;
                 Command::Host(operation, arguments)
             }
             _ if parser.take(Token::Symbol("("))
@@ -601,7 +629,7 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
         if matches!(command, Command::RoutineStart) && !main_ended {
             return Err(error("routine definitions belong after FimPrograma".into()));
         }
-        main_ended |= matches!(command, Command::EndProgram);
+        main_ended |= matches!(command, Command::EndProgram | Command::EndWindow);
         header &= matches!(
             command,
             Command::Declare(_) | Command::HostBlock(Operation::DatabaseDefine, _, _)
@@ -631,13 +659,58 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
     Ok(statements)
 }
 
+fn validate_host_argument_count(operation: Operation, count: usize) -> Result<(), String> {
+    let valid = match operation {
+        Operation::Background | Operation::StopSound | Operation::BoxAdd => count == 1,
+        Operation::Draw | Operation::Play | Operation::PrintDraw => (1..=2).contains(&count),
+        Operation::Component
+        | Operation::BoxPosition
+        | Operation::BoxTitle
+        | Operation::PrintPosition => count == 2,
+        Operation::RemoveButtons
+        | Operation::BoxActivate
+        | Operation::BoxNew
+        | Operation::BoxDeactivate
+        | Operation::PrintNewPage
+        | Operation::PrintFinish => count == 0,
+        Operation::PrintWrite => count >= 1,
+        _ => true,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "{operation:?} received an invalid number of arguments"
+        ))
+    }
+}
+
+fn validate_database_argument_count(operation: Operation, count: usize) -> Result<(), String> {
+    let valid = match operation {
+        Operation::DatabaseOpen => (1..=2).contains(&count),
+        Operation::DatabaseClose | Operation::DatabaseAppend | Operation::DatabaseCompact => {
+            count == 1
+        }
+        Operation::DatabaseRead | Operation::DatabaseDelete => count == 2,
+        Operation::DatabaseOrder => count >= 2,
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "{operation:?} received an invalid number of arguments"
+        ))
+    }
+}
+
 fn reserved(name: &str) -> bool {
     const WORDS: &str = "
         MEMORIA POSICIONE ESCREVA LIMPAJANELA SE CASOCONTRARIO FIMSE VAPARA
         FIMPROGRAMA FIMJANELA SIM NAO E OU ENTRATEXTO
         MENSAGEM FUNDO FONTE JANELA COMPONENTE AGUARDE CRIA FIMCRIA DESENHE
         DESENHEOBJETOS POSICIONEOBJETO TRANSPARENTE SOM FIMSOM VIDEO TESTAMOUSE
-        EXECUTE RETORNE UNIR SEPARE DATA HORA FORMATA PROCUREMATRIZ
+        EXECUTE RETORNE UNIR SEPARE DATA HORA FORMATA PROCUREMATRIZ ENTRE
         GRAVAMEMORIA CARREGAMEMORIA APAGAMEMORIA REORGANIZAMEMORIA CARREGAPROGRAMA
         MENU FIMMENU BOTAO FIMBOTAO RGB IMP ALEATORIO
         BD FIMBD ABREBD FECHABD ADICIONAREGISTRO LEREGISTRO ORDEMBD PROCURE TOTALREGISTROS
@@ -660,6 +733,7 @@ fn builtin(name: &str) -> bool {
             | "ALINHA"
             | "RGB"
             | "ALEATORIO"
+            | "ENTRE"
             | "DATA"
             | "HORA"
             | "TESTAMOUSE"
@@ -677,6 +751,7 @@ fn builtin_takes_arguments(name: &str) -> bool {
             | "ALINHA"
             | "RGB"
             | "ALEATORIO"
+            | "ENTRE"
             | "TOTALREGISTROS"
             | "PROCURE"
     )
@@ -788,6 +863,7 @@ enum OperandContext {
     Argument,
     Output,
     Condition,
+    Wait,
 }
 
 struct Parser<'tokens, 'source> {
@@ -852,7 +928,7 @@ impl<'source> Parser<'_, 'source> {
             Some(Token::Digits(integer)) => {
                 let number = match self.tokens {
                     [Token::Symbol(","), Token::Digits(fraction), rest @ ..]
-                        if context == OperandContext::Assignment =>
+                        if matches!(context, OperandContext::Assignment | OperandContext::Wait) =>
                     {
                         self.tokens = rest;
                         finite_number(&format!("{integer}.{fraction}"))?
@@ -870,6 +946,9 @@ impl<'source> Parser<'_, 'source> {
             Some(Token::Name(name)) if !negative => {
                 let upper = name.to_ascii_uppercase();
                 if builtin(&upper) {
+                    if context != OperandContext::Assignment {
+                        return Err("commands cannot be passed as arguments".into());
+                    }
                     let arguments = self.builtin_arguments(&upper, context, memories)?;
                     Atom::Builtin(upper, arguments)
                 } else if self.take(Token::Symbol("(")) {
@@ -917,6 +996,12 @@ impl<'source> Parser<'_, 'source> {
     ) -> Result<Vec<Operand>, String> {
         let parenthesized = self.take(Token::Symbol("("));
         let mut arguments = Vec::new();
+        if !builtin_takes_arguments(name) {
+            if parenthesized && !self.take(Token::Symbol(")")) {
+                return Err(format!("{name} does not take arguments"));
+            }
+            return Ok(arguments);
+        }
         if parenthesized || builtin_takes_arguments(name) {
             if !parenthesized || !self.take(Token::Symbol(")")) {
                 let argument_context = if context == OperandContext::Condition {
@@ -933,6 +1018,15 @@ impl<'source> Parser<'_, 'source> {
                 }
             }
         }
+        match name {
+            "TOTALREGISTROS" if arguments.len() != 1 => {
+                return Err("TotalRegistros expects one database name".into());
+            }
+            "PROCURE" if arguments.len() < 3 => {
+                return Err("Procure expects a database, mode, and search value".into());
+            }
+            _ => {}
+        }
         Ok(arguments)
     }
 
@@ -940,6 +1034,32 @@ impl<'source> Parser<'_, 'source> {
         &mut self,
         context: OperandContext,
         memories: &HashSet<String>,
+    ) -> Result<Vec<Operand>, String> {
+        self.argument_list(context, memories, false, false)
+    }
+
+    fn arguments_with_whitespace(
+        &mut self,
+        context: OperandContext,
+        memories: &HashSet<String>,
+    ) -> Result<Vec<Operand>, String> {
+        self.argument_list(context, memories, false, true)
+    }
+
+    fn window_arguments(
+        &mut self,
+        context: OperandContext,
+        memories: &HashSet<String>,
+    ) -> Result<Vec<Operand>, String> {
+        self.argument_list(context, memories, true, false)
+    }
+
+    fn argument_list(
+        &mut self,
+        context: OperandContext,
+        memories: &HashSet<String>,
+        paired_dimensions: bool,
+        allow_whitespace_separator: bool,
     ) -> Result<Vec<Operand>, String> {
         let mut arguments = Vec::new();
         while !self.tokens.is_empty() {
@@ -957,7 +1077,9 @@ impl<'source> Parser<'_, 'source> {
             if let Some(name) = arguments
                 .last()
                 .and_then(|argument| argument.name.as_deref())
-                .filter(|name| matches!(*name, "RESOLUCAO" | "POSICAO" | "TAMANHO"))
+                .filter(|name| {
+                    paired_dimensions && matches!(*name, "RESOLUCAO" | "POSICAO" | "TAMANHO")
+                })
                 .map(str::to_owned)
             {
                 self.comma()?;
@@ -965,8 +1087,12 @@ impl<'source> Parser<'_, 'source> {
                 second.name = Some(name);
                 arguments.push(second);
             }
-            if !self.take(Token::Symbol(",")) && self.tokens.is_empty() {
-                break;
+            if self.take(Token::Symbol(",")) {
+                if self.tokens.is_empty() {
+                    return Err("expected an argument after the separator".into());
+                }
+            } else if !allow_whitespace_separator && !self.tokens.is_empty() {
+                return Err("expected an argument separator (,)".into());
             }
         }
         Ok(arguments)

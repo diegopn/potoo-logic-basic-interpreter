@@ -33,6 +33,11 @@ impl Window {
         self.cells.first().map_or(0, Vec::len)
     }
 
+    /// Returns the current zero-based text cursor row and column.
+    pub fn cursor(&self) -> (usize, usize) {
+        (self.row, self.column)
+    }
+
     /// Returns the character at the given zero-based row and column.
     pub fn cell(&self, row: usize, column: usize) -> Option<char> {
         self.cells.get(row)?.get(column).copied()

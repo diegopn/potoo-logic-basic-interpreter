@@ -209,9 +209,9 @@ fn execute_program(
                         window: &window,
                     })
                     .map_err(|cause| Error::from_io(statement.line, "EntraTexto", cause))?;
-                let text = response
-                    .ok_or_else(|| error("EntraTexto did not return text".into()))?
-                    .text();
+                let Some(HostValue::Text(text)) = response else {
+                    return Err(error("EntraTexto did not return text".into()));
+                };
                 set_memory(memories, name, Value::Text(text)).map_err(error)?;
             }
             Command::Position(row, column) => {
@@ -246,13 +246,18 @@ fn execute_program(
                 host.window_changed(&window)
                     .map_err(|cause| Error::from_io(statement.line, "LimpaJanela", cause))?;
             }
-            Command::Message(value) => {
+            Command::Message(values) => {
+                let message: String = values
+                    .iter()
+                    .map(|value| {
+                        evaluate_operand(value, &memories, &databases, host, &window)
+                            .map(|value| value.text())
+                    })
+                    .collect::<Result<_, _>>()
+                    .map_err(error)?;
                 let arguments = [HostArgument {
                     name: None,
-                    value: to_host_value(
-                        evaluate_operand(value, &memories, &databases, host, &window)
-                            .map_err(error)?,
-                    ),
+                    value: HostValue::Text(message),
                 }];
                 host.request(Request {
                     operation: Operation::Message,
@@ -263,67 +268,86 @@ fn execute_program(
                 .map_err(|cause| Error::from_io(statement.line, "Mensagem", cause))?;
             }
             Command::Wait(values) => {
-                let arguments: Vec<_> = values
-                    .iter()
-                    .map(|operand| {
-                        evaluate_operand(operand, &memories, &databases, host, &window).map(
-                            |value| HostArgument {
-                                name: operand.name.clone(),
-                                value: to_host_value(value),
-                            },
-                        )
-                    })
-                    .collect::<Result<_, _>>()
-                    .map_err(error)?;
-                let kind = arguments
-                    .first()
-                    .map(|argument| argument.value.text().to_ascii_uppercase());
-                let operation = match arguments.first().map(|argument| &argument.value) {
-                    Some(HostValue::Number(_)) => Operation::WaitSeconds,
-                    _ => match kind.as_deref() {
-                        Some("CLIQUEOBJETO") => Operation::WaitObject,
-                        Some("CLIQUEBOTAO") => Operation::WaitButton,
-                        _ => Operation::WaitKey,
-                    },
+                let target = values.first().map(|operand| &operand.value);
+                let (operation, destination) = match target {
+                    None => (Operation::WaitKey, None),
+                    Some(syntax::Atom::Memory(name)) => {
+                        if matches!(memories.get(name), Some(Value::Array(_))) {
+                            return Err(error(
+                                "Aguarde key destination must be a scalar memory".into(),
+                            ));
+                        }
+                        (Operation::WaitKey, Some(name.as_str()))
+                    }
+                    Some(syntax::Atom::Literal(Value::Number(_))) => (Operation::WaitSeconds, None),
+                    Some(syntax::Atom::Literal(Value::Text(kind)))
+                        if kind.eq_ignore_ascii_case("CLIQUEOBJETO") =>
+                    {
+                        (Operation::WaitObject, None)
+                    }
+                    Some(syntax::Atom::Literal(Value::Text(kind)))
+                        if kind.eq_ignore_ascii_case("CLIQUEBOTAO") =>
+                    {
+                        (Operation::WaitButton, None)
+                    }
+                    _ => {
+                        return Err(error(
+                            "Aguarde expects a key memory, seconds, CliqueObjeto, or CliqueBotao"
+                                .into(),
+                        ));
+                    }
                 };
-                if operation == Operation::WaitSeconds {
-                    let Some(HostValue::Number(seconds)) =
-                        arguments.first().map(|argument| &argument.value)
-                    else {
-                        return Err(error("Aguarde seconds requires a number".into()));
-                    };
-                    if !seconds.is_finite() || *seconds < 0.0 {
+                let arguments = if operation == Operation::WaitSeconds {
+                    let value = evaluate_operand(
+                        values
+                            .first()
+                            .ok_or_else(|| error("Aguarde requires seconds".into()))?,
+                        &memories,
+                        &databases,
+                        host,
+                        &window,
+                    )
+                    .map_err(error)?;
+                    let seconds = value.number().map_err(error)?;
+                    if seconds < 0.0 {
                         return Err(error(
                             "Aguarde seconds must be finite and nonnegative".into(),
                         ));
                     }
-                }
+                    vec![HostArgument {
+                        name: None,
+                        value: to_host_value(value),
+                    }]
+                } else {
+                    Vec::new()
+                };
                 let result = host
                     .request(Request {
                         operation,
-                        arguments: if operation == Operation::WaitSeconds {
-                            &arguments
-                        } else {
-                            &[]
-                        },
+                        arguments: &arguments,
                         rows: &[],
                         window: &window,
                     })
                     .map_err(|cause| Error::from_io(statement.line, "Aguarde", cause))?;
-                if let Some(value) = result {
-                    match values.first().map(|argument| &argument.value) {
-                        Some(syntax::Atom::Memory(name)) => {
-                            set_memory(memories, name, from_host_value(value)).map_err(error)?;
-                        }
-                        Some(syntax::Atom::Literal(Value::Text(kind)))
-                            if kind.eq_ignore_ascii_case("CLIQUEOBJETO")
-                                || kind.eq_ignore_ascii_case("CLIQUEBOTAO") =>
-                        {
-                            set_memory(memories, "RETORNO", from_host_value(value))
-                                .map_err(error)?;
-                        }
-                        _ => {}
+                match operation {
+                    Operation::WaitKey if destination.is_some() => {
+                        let Some(HostValue::Text(value)) = result else {
+                            return Err(error("Aguarde key wait did not return text".into()));
+                        };
+                        set_memory(
+                            memories,
+                            destination.ok_or_else(|| error("missing key destination".into()))?,
+                            Value::Text(value),
+                        )
+                        .map_err(error)?;
                     }
+                    Operation::WaitObject | Operation::WaitButton => {
+                        let Some(HostValue::Text(value)) = result else {
+                            return Err(error("Aguarde click wait did not return text".into()));
+                        };
+                        set_memory(memories, "RETORNO", Value::Text(value)).map_err(error)?;
+                    }
+                    _ => {}
                 }
             }
             Command::Host(operation, values) => {
@@ -417,6 +441,29 @@ fn execute_program(
                         })
                         .collect::<Result<_, _>>()
                         .map_err(error)?;
+                if *operation == Operation::Buttons
+                    && matches!(
+                        arguments.as_slice(),
+                        [HostArgument {
+                            value: HostValue::Text(kind),
+                            ..
+                        }] if kind.eq_ignore_ascii_case("ESPECIAL")
+                    )
+                {
+                    for row in &rows {
+                        let button_type = row
+                            .get(3)
+                            .ok_or_else(|| error("Botao Especial requires a button type".into()))?
+                            .value
+                            .number()
+                            .map_err(error)?;
+                        if button_type.fract() != 0.0 || !(1.0..=9.0).contains(&button_type) {
+                            return Err(error(
+                                "Botao Especial type must be an integer from 1 to 9".into(),
+                            ));
+                        }
+                    }
+                }
                 if *operation == Operation::DatabaseDefine {
                     if arguments.len() != 2 {
                         return Err(error("BD requires a name and data directory".into()));
@@ -491,7 +538,12 @@ fn execute_program(
                         window: &window,
                     })
                     .map_err(|cause| error(format!("{operation:?}: {cause}")))?;
-                if let Some(value) = response {
+                if *operation == Operation::Menu {
+                    let Some(HostValue::Text(selected)) = response else {
+                        return Err(error("Menu did not return the selected text".into()));
+                    };
+                    set_memory(memories, "RETORNO", Value::Text(selected)).map_err(error)?;
+                } else if let Some(value) = response {
                     set_memory(memories, "RETORNO", from_host_value(value)).map_err(error)?;
                 }
             }
@@ -767,11 +819,28 @@ fn execute_database(
     host: &mut dyn Host,
     window: &Window,
 ) -> Result<(), String> {
-    let name = arguments
+    let first = arguments
         .first()
-        .ok_or_else(|| format!("{operation:?} requires a database name"))?
-        .text()
-        .to_ascii_uppercase();
+        .ok_or_else(|| format!("{operation:?} requires a database name or file name"))?;
+    let name = if operation == Operation::DatabaseOpen && arguments.len() == 1 {
+        let requested_file = first.text();
+        let file_key = database_name_from_file(&requested_file);
+        if databases.contains_key(&file_key) {
+            file_key
+        } else if databases.len() == 1 {
+            databases
+                .keys()
+                .next()
+                .expect("the sole database remains registered")
+                .clone()
+        } else {
+            return Err(format!(
+                "AbreBD file {requested_file} does not identify one of the declared databases"
+            ));
+        }
+    } else {
+        first.text().to_ascii_uppercase()
+    };
     let table = databases
         .get(&name)
         .ok_or_else(|| format!("unknown database {name}"))?;
@@ -782,10 +851,11 @@ fn execute_database(
             }
             let directory = table.directory.clone();
             let fields = table.fields.clone();
-            let file = arguments
-                .get(1)
-                .map(Value::text)
-                .unwrap_or_else(|| name.clone());
+            let file = if arguments.len() == 1 {
+                arguments[0].text()
+            } else {
+                arguments[1].text()
+            };
             let file = if file.to_ascii_lowercase().ends_with(".lba") {
                 file
             } else {
@@ -829,22 +899,27 @@ fn execute_database(
         Operation::DatabaseAppend => {
             let (directory, file, records) = {
                 let table = databases
-                    .get_mut(&name)
+                    .get(&name)
                     .expect("database remains registered while appending");
                 let records = table
                     .records
-                    .as_mut()
+                    .as_ref()
                     .ok_or_else(|| format!("database {name} is not open"))?;
-                records.push(Some(build_record(&table.fields, &table.current)));
-                table.current = blank_record(&table.fields);
+                let mut next_records = records.clone();
+                next_records.push(Some(build_record(&table.fields, &table.current)));
                 (
                     table.directory.clone(),
                     table.file.clone().expect("open database has a filename"),
-                    records.clone(),
+                    next_records,
                 )
             };
             host.save_database(&directory, &file, &records)
                 .map_err(|cause| format!("AdicionaRegistro: {cause}"))?;
+            let table = databases
+                .get_mut(&name)
+                .expect("database remains registered after appending");
+            table.records = Some(records);
+            table.current = blank_record(&table.fields);
         }
         Operation::DatabaseRead => {
             let index = arguments
@@ -881,33 +956,35 @@ fn execute_database(
             if index < 0.0 || index.fract() != 0.0 || index > usize::MAX as f64 {
                 return Err("ExcluiRegistro position must be a nonnegative integer".into());
             }
-            if table.records.is_none() {
-                return Err(format!("database {name} is not open"));
-            }
-            let physical = database_view(table)
-                .get(index as usize)
-                .copied()
-                .ok_or_else(|| format!("record position {index} is out of range"))?;
             let (directory, file, records) = {
                 let table = databases
-                    .get_mut(&name)
+                    .get(&name)
                     .expect("database remains registered while deleting");
-                let records = table
+                let current_records = table
                     .records
-                    .as_mut()
+                    .as_ref()
                     .ok_or_else(|| format!("database {name} is not open"))?;
-                if records[physical].is_none() {
+                let physical = database_view(table)
+                    .get(index as usize)
+                    .copied()
+                    .ok_or_else(|| format!("record position {index} is out of range"))?;
+                if current_records[physical].is_none() {
                     return Err(format!("record position {index} is already deleted"));
                 }
-                records[physical] = None;
+                let mut next_records = current_records.clone();
+                next_records[physical] = None;
                 (
                     table.directory.clone(),
                     table.file.clone().expect("open database has a filename"),
-                    records.clone(),
+                    next_records,
                 )
             };
             host.save_database(&directory, &file, &records)
                 .map_err(|cause| format!("ExcluiRegistro: {cause}"))?;
+            databases
+                .get_mut(&name)
+                .expect("database remains registered after deleting")
+                .records = Some(records);
         }
         Operation::DatabaseOrder => {
             let order = arguments
@@ -944,26 +1021,43 @@ fn execute_database(
         Operation::DatabaseCompact => {
             let (directory, file, records) = {
                 let table = databases
-                    .get_mut(&name)
+                    .get(&name)
                     .expect("database remains registered while compacting");
-                let records = table
+                let current_records = table
                     .records
-                    .as_mut()
+                    .as_ref()
                     .ok_or_else(|| format!("database {name} is not open"))?;
-                records.retain(Option::is_some);
+                let mut next_records = current_records.clone();
+                next_records.retain(Option::is_some);
                 (
                     table.directory.clone(),
                     table.file.clone().expect("open database has a filename"),
-                    records.clone(),
+                    next_records,
                 )
             };
             host.save_database(&directory, &file, &records)
                 .map_err(|cause| format!("LimpaBD: {cause}"))?;
+            databases
+                .get_mut(&name)
+                .expect("database remains registered after compacting")
+                .records = Some(records);
         }
         _ => return Err(format!("unsupported database operation {operation:?}")),
     }
     let _ = window;
     Ok(())
+}
+
+fn database_name_from_file(file: &str) -> String {
+    let basename = file
+        .rsplit(|character| character == '/' || character == '\\')
+        .next()
+        .unwrap_or(file)
+        .to_ascii_uppercase();
+    basename
+        .strip_suffix(".LBA")
+        .unwrap_or(&basename)
+        .to_owned()
 }
 
 fn database_view(table: &Database) -> Vec<usize> {
@@ -1002,13 +1096,53 @@ fn compare_records(left: &Record, right: &Record, fields: &[String]) -> Ordering
 
 fn compare_database_values(left: Option<&HostValue>, right: Option<&HostValue>) -> Ordering {
     match (left, right) {
-        (Some(HostValue::Number(left)), Some(HostValue::Number(right))) => {
-            left.partial_cmp(right).unwrap_or(Ordering::Equal)
-        }
-        (Some(left), Some(right)) => left.text().cmp(&right.text()),
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Less,
         (Some(_), None) => Ordering::Greater,
+        (Some(left), Some(right)) => {
+            let type_order = database_value_rank(left).cmp(&database_value_rank(right));
+            if type_order != Ordering::Equal {
+                return type_order;
+            }
+            match (left, right) {
+                (HostValue::Number(left), HostValue::Number(right)) => {
+                    if left == right {
+                        Ordering::Equal
+                    } else {
+                        left.total_cmp(right)
+                    }
+                }
+                (HostValue::Text(left), HostValue::Text(right))
+                | (HostValue::Object(left), HostValue::Object(right))
+                | (HostValue::Sound(left), HostValue::Sound(right)) => left.cmp(right),
+                (HostValue::Logic(left), HostValue::Logic(right)) => left.cmp(right),
+                (HostValue::Color(lr, lg, lb), HostValue::Color(rr, rg, rb)) => {
+                    (lr, lg, lb).cmp(&(rr, rg, rb))
+                }
+                (HostValue::Array(left), HostValue::Array(right)) => {
+                    for (left, right) in left.iter().zip(right) {
+                        let order = compare_database_values(left.as_ref(), right.as_ref());
+                        if order != Ordering::Equal {
+                            return order;
+                        }
+                    }
+                    left.len().cmp(&right.len())
+                }
+                _ => Ordering::Equal,
+            }
+        }
+    }
+}
+
+fn database_value_rank(value: &HostValue) -> u8 {
+    match value {
+        HostValue::Number(_) => 0,
+        HostValue::Text(_) => 1,
+        HostValue::Logic(_) => 2,
+        HostValue::Object(_) => 3,
+        HostValue::Sound(_) => 4,
+        HostValue::Color(_, _, _) => 5,
+        HostValue::Array(_) => 6,
     }
 }
 
@@ -1182,15 +1316,32 @@ fn evaluate_operand(
                 name: None,
                 value: HostValue::Text(name.clone()),
             };
-            host.request(Request {
-                operation: Operation::ReservedMemory,
-                arguments: &[argument],
-                rows: &[],
-                window,
-            })
-            .map_err(|cause| format!("reserved memory {name}: {cause}"))?
-            .map(from_host_value)
-            .ok_or_else(|| format!("host did not return reserved memory {name}"))
+            let value = host
+                .request(Request {
+                    operation: Operation::ReservedMemory,
+                    arguments: &[argument],
+                    rows: &[],
+                    window,
+                })
+                .map_err(|cause| format!("reserved memory {name}: {cause}"))?
+                .ok_or_else(|| format!("host did not return reserved memory {name}"))?;
+            match name.as_str() {
+                "LINHAMOUSE" | "COLUNAMOUSE" => match value {
+                    HostValue::Number(number) if number.is_finite() => Ok(Value::Number(number)),
+                    _ => Err(format!("reserved memory {name} must be numeric")),
+                },
+                "CLIQUEMOUSE" => match value {
+                    HostValue::Logic(value) => Ok(Value::Logic(value)),
+                    _ => Err("reserved memory CLIQUEMOUSE must be logical".into()),
+                },
+                "CORATUAL" | "AZUL" | "VERMELHO" | "VERDE" | "AMARELO" | "AZULCLARO"
+                | "AZULESCURO" | "VERMELHOESCURO" | "VERDEESCURO" | "AMARELOESCURO" | "PRETO"
+                | "BRANCO" => match value {
+                    HostValue::Color(red, green, blue) => Ok(Value::Color(red, green, blue)),
+                    _ => Err(format!("reserved memory {name} must be a color")),
+                },
+                _ => Ok(from_host_value(value)),
+            }
         }
         syntax::Atom::Builtin(name, arguments) => {
             evaluate_builtin(name, arguments, memories, databases, host, window)
@@ -1259,7 +1410,12 @@ fn evaluate_builtin(
         .map(|argument| evaluate_operand(argument, memories, databases, host, window))
         .collect::<Result<Vec<_>, _>>()?;
     match name {
-        "UNIR" => Ok(Value::Text(values.iter().map(Value::text).collect())),
+        "UNIR" => {
+            if values.is_empty() {
+                return Err("Unir expects at least one value".into());
+            }
+            Ok(Value::Text(values.iter().map(Value::text).collect()))
+        }
         "SEPARE" => {
             if !(2..=3).contains(&values.len()) {
                 return Err("Separe expects text, start position, and optional length".into());
@@ -1398,16 +1554,33 @@ fn evaluate_builtin(
                     value: to_host_value(value),
                 })
                 .collect();
-            host.request(Request {
-                operation,
-                arguments: &host_arguments,
-                rows: &[],
-                window,
-            })
-            .map_err(|cause| format!("{name}: {cause}"))?
-            .map(from_host_value)
-            .ok_or_else(|| format!("{name} did not return a value"))
+            let value = host
+                .request(Request {
+                    operation,
+                    arguments: &host_arguments,
+                    rows: &[],
+                    window,
+                })
+                .map_err(|cause| format!("{name}: {cause}"))?
+                .ok_or_else(|| format!("{name} did not return a value"))?;
+            match name {
+                "DATA" | "HORA" => match value {
+                    HostValue::Text(text) => Ok(Value::Text(text)),
+                    _ => Err(format!("{name} must return text")),
+                },
+                "TESTAMOUSE" => match value {
+                    HostValue::Text(text)
+                        if text.len() == 2
+                            && text.bytes().all(|byte| matches!(byte, b'0' | b'1')) =>
+                    {
+                        Ok(Value::Text(text))
+                    }
+                    _ => Err("TestaMouse must return two 0/1 button states".into()),
+                },
+                _ => unreachable!("only date, time, and mouse remain host-backed"),
+            }
         }
+        "ENTRE" => Err("Entre's signature is not defined in the available manual".into()),
         _ => Err(format!("unsupported function {name}")),
     }
 }

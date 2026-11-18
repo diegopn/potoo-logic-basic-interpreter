@@ -119,6 +119,9 @@ impl Host for ConsoleHost {
                 Ok(None)
             }
             Operation::WaitKey => {
+                let mut stderr = io::stderr().lock();
+                write!(stderr, "{}", request.window)?;
+                stderr.flush()?;
                 let mut input = String::new();
                 io::stdin().read_line(&mut input)?;
                 if input.ends_with('\n') {
@@ -127,7 +130,8 @@ impl Host for ConsoleHost {
                         input.pop();
                     }
                 }
-                Ok(Some(HostValue::Text(input)))
+                let key = input.chars().next().into_iter().collect();
+                Ok(Some(HostValue::Text(key)))
             }
             Operation::WaitSeconds => {
                 if let Some(seconds) = request

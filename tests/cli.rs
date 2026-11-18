@@ -98,6 +98,32 @@ fn cli_routes_text_input_and_shows_its_prompt_on_stderr() {
 }
 
 #[test]
+fn cli_shows_the_text_window_before_key_wait_and_returns_one_character() {
+    let directory = ProgramDirectory::new();
+    let path = directory.write(
+        "wait.lbc",
+        "Memoria Tecla\nEscreva \"Pressione uma tecla\"\nAguarde Tecla\nEscreva \"Tecla: \", Tecla\nFimPrograma",
+    );
+
+    let output = run(&path, "Qabc\n");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Pressione uma tecla\nTecla: Q\n"
+    );
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("Pressione uma tecla")
+    );
+}
+
+#[test]
 fn cli_reports_the_source_line_and_exits_unsuccessfully_for_invalid_programs() {
     let directory = ProgramDirectory::new();
     let path = directory.write("invalid.lbc", "Escreva \"ok\"\nFimSe");

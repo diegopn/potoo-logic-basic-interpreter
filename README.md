@@ -23,6 +23,8 @@ Originally developed as part of the Potoo IDE project, this interpreter is an in
 
 Logic Basic is a programming language, not a pseudolanguage. This interpreter implements the documented 7.0 command language; its host API lets Potoo IDE provide the visual interface.
 
+The available introductory manual mentions a database function named `Entre`, but does not define its call syntax or argument rules. That function is not included in the implemented subset.
+
 ## Original language references
 
 - [Curso Básico de Logic Basic 7.0, Eleusmário Mariano Rabelo](https://pt.scribd.com/document/420235581/Manual-do-Logic-Basic) — primary reference for the documented language.
