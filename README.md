@@ -50,7 +50,68 @@ FimPrograma
 
 ### Install a release build
 
-Download the archive for your platform from [GitHub Releases](https://github.com/diegopn/potoo-logic-basic-interpreter/releases), extract it, and place the `potoo-logic-basic` executable somewhere on your `PATH`. Published binaries target Linux x86_64 GNU, Windows x86_64 MSVC, and macOS Intel x86_64. No arm64 binary is published.
+The v0.1.1 release provides native CLI packages for Linux x86_64 GNU, Windows x86_64 MSVC, Intel macOS x86_64, and Apple silicon macOS arm64. Download your system's archive and `SHA256SUMS` from the [latest GitHub release](https://github.com/diegopn/potoo-logic-basic-interpreter/releases/latest), then run the matching commands below from the folder containing both files. Each archive contains `potoo-logic-basic` (or `potoo-logic-basic.exe` on Windows) and the repository license. Use the `saudacao.lbc` example documented above, or replace it with your own program.
+
+#### Linux x86_64 GNU
+
+```sh
+set -euo pipefail
+archive="potoo-logic-basic-interpreter-v0.1.1-x86_64-unknown-linux-gnu.tar.gz"
+grep -F "  $archive" SHA256SUMS | sha256sum --check -
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "${archive%.tar.gz}/potoo-logic-basic" "$HOME/.local/bin/potoo-logic-basic"
+export PATH="$HOME/.local/bin:$PATH"
+potoo-logic-basic saudacao.lbc
+```
+
+To keep the command available in new Linux sessions, add the `export PATH="$HOME/.local/bin:$PATH"` line to your shell profile.
+
+#### Windows x86_64 MSVC (PowerShell)
+
+```powershell
+$archive = "potoo-logic-basic-interpreter-v0.1.1-x86_64-pc-windows-msvc.zip"
+$line = Get-Content .\SHA256SUMS | Where-Object { $_.EndsWith("  $archive") } | Select-Object -First 1
+if (-not $line) { throw "No SHA256SUMS entry found for $archive" }
+$expected = ($line -split '\s+')[0]
+$actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 mismatch for $archive" }
+$installDir = Join-Path $env:USERPROFILE ".local\bin"
+New-Item -ItemType Directory -Force $installDir | Out-Null
+Expand-Archive -LiteralPath $archive -DestinationPath $installDir
+$exe = Join-Path $installDir "potoo-logic-basic-interpreter-v0.1.1-x86_64-pc-windows-msvc\potoo-logic-basic.exe"
+& $exe .\saudacao.lbc
+```
+
+To run `potoo-logic-basic.exe` from any folder, add `$env:USERPROFILE\.local\bin\potoo-logic-basic-interpreter-v0.1.1-x86_64-pc-windows-msvc` to your user `Path` environment variable in Windows Settings.
+
+#### Intel macOS x86_64
+
+```sh
+set -euo pipefail
+archive="potoo-logic-basic-interpreter-v0.1.1-x86_64-apple-darwin.tar.gz"
+grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "${archive%.tar.gz}/potoo-logic-basic" "$HOME/.local/bin/potoo-logic-basic"
+export PATH="$HOME/.local/bin:$PATH"
+potoo-logic-basic saudacao.lbc
+```
+
+#### Apple silicon macOS arm64
+
+```sh
+set -euo pipefail
+archive="potoo-logic-basic-interpreter-v0.1.1-aarch64-apple-darwin.tar.gz"
+grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "${archive%.tar.gz}/potoo-logic-basic" "$HOME/.local/bin/potoo-logic-basic"
+export PATH="$HOME/.local/bin:$PATH"
+potoo-logic-basic saudacao.lbc
+```
+
+On macOS, add the `export PATH="$HOME/.local/bin:$PATH"` line to `~/.zprofile` to keep the command available in future sessions.
 
 ### Build and install from source
 
@@ -141,13 +202,15 @@ Visual, media, printing, memory snapshot, and database storage operations are se
 The compatibility target is the documented Logic Basic 7.0 command language in the primary reference above. The original manual describes a Windows-oriented BASIC programming language. A verified Logic Basic 7.0 runtime or original fixture is not available for differential testing, so undocumented behavior is not presented as confirmed parity.
 
 - `ReorganizaMemoria` compacts internal memory slots according to the manual. This interpreter addresses memories by name, and its snapshot API exposes named values rather than slot numbers; the command therefore has no observable effect through this language/API. The original allocator's internal behavior is unverified.
-- The manual documents zero-based matrix indices and empty contents for unset elements. This implementation limits all declared and loaded matrix storage to 1,000,000 elements in total; that safety limit is not specified by the manual.
+- The manual documents zero-based matrix indices and empty contents for unset elements. Matrix allocation has no additional language-level element cap; it is constrained by address space and available memory, and reservation failures are reported at the source line.
 - `Separe` uses one-based Unicode scalar positions. The manual gives character-based examples but does not define Unicode normalization, grapheme clusters, or legacy encodings.
-- The text grid is 27 by 79 cells by default, as documented. In this implementation `Escreva` advances one row after each command, clips text at the right edge without wrapping, and reports the resulting cursor through `Host`; the manual does not specify those boundary details, so they have not been compared with the original runtime.
+- The text grid is 27 by 79 cells by default, as documented. Configured dimensions are limited by address-space overflow and available memory, with failed reservations reported as errors. In this implementation `Escreva` advances one row after each command, clips text at the right edge without wrapping, and reports the resulting cursor through `Host`; the manual does not specify those boundary details, so they have not been compared with the original runtime.
 - `Aleatorio` returns an integer in the inclusive range from zero to its argument. The CLI accepts integer maxima through `2^53 - 1` and uses a time/process-seeded generator without a seed command; the original sequence and seeding behavior are not documented. An embedding host can supply deterministic values for tests.
 - Recursive routines use an explicit return stack with no fixed language-level depth limit. The manual confirms recursion but does not specify a maximum depth.
 - The manual confirms the `.LBA` extension and how `AbreBD` chooses a filename, but does not describe its bytes or record encoding. Hosts receive logical records; physical `.LBA` interoperability is unverified.
 - The manual mentions `Entre` as a database-field argument but does not provide a callable signature or argument rules, so this function is not implemented.
+
+See [reference coverage](REFERENCE-COVERAGE.md) for the selected manual, implemented areas, and documented limits.
 
 ## Development
 

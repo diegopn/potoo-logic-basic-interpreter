@@ -130,23 +130,16 @@ fn execute_program(
         current += 1;
         match &statement.command {
             Command::Declare(names) => {
-                let mut array_elements = total_array_elements(memories);
                 for (name, size) in names {
-                    if let Some(Value::Array(existing)) = memories.get(name) {
-                        array_elements = array_elements.saturating_sub(existing.len());
-                    }
-                    if let Some(size) = size {
-                        array_elements = array_elements
-                            .checked_add(*size)
-                            .filter(|total| *total <= MAX_ARRAY_ELEMENTS)
-                            .ok_or_else(|| {
-                                error(format!(
-                                    "total array storage cannot exceed {MAX_ARRAY_ELEMENTS} elements"
-                                ))
-                            })?;
-                    }
                     let value = match size {
-                        Some(size) => Value::Array(vec![Some(Value::Text(String::new())); *size]),
+                        Some(size) => {
+                            let mut values = Vec::new();
+                            values.try_reserve_exact(*size).map_err(|cause| {
+                                error(format!("cannot allocate array '{name}': {cause}"))
+                            })?;
+                            values.resize_with(*size, || Some(Value::Text(String::new())));
+                            Value::Array(values)
+                        }
                         None => Value::Text(String::new()),
                     };
                     memories.insert(name.clone(), value);
@@ -645,20 +638,6 @@ fn execute_program(
                         if name == "RETORNO" {
                             continue;
                         }
-                        let mut array_elements = total_array_elements(memories);
-                        if let Some(Value::Array(existing)) = memories.get(&name) {
-                            array_elements = array_elements.saturating_sub(existing.len());
-                        }
-                        if let HostMemory::Array(values) = &value {
-                            array_elements = array_elements
-                                .checked_add(values.len())
-                                .filter(|total| *total <= MAX_ARRAY_ELEMENTS)
-                                .ok_or_else(|| {
-                                    error(format!(
-                                        "loaded memories exceed the {MAX_ARRAY_ELEMENTS}-element array limit"
-                                    ))
-                                })?;
-                        }
                         memories.insert(name, from_host_memory(value));
                     }
                 }
@@ -720,15 +699,6 @@ fn set_memory(memories: &mut Memories, name: &str, value: Value) -> Result<(), S
         .ok_or_else(|| format!("unknown memory {name}"))?;
     *memory = value;
     Ok(())
-}
-
-fn total_array_elements(memories: &Memories) -> usize {
-    memories.values().fold(0usize, |total, memory| {
-        total.saturating_add(match memory {
-            Value::Array(values) => values.len(),
-            _ => 0,
-        })
-    })
 }
 
 fn window_resolution(arguments: &[HostArgument]) -> Result<Option<(usize, usize)>, String> {
@@ -1291,7 +1261,6 @@ where
 }
 
 type Memories = HashMap<String, Value>;
-const MAX_ARRAY_ELEMENTS: usize = 1_000_000;
 
 fn evaluate_operand(
     operand: &Operand,
@@ -1448,25 +1417,36 @@ fn evaluate_builtin(
                 return Err("Alinha expects text, field width, and DIR or ESQ".into());
             }
             let text = values[0].text();
-            let width = integer_value(&values[1], "Alinha width")?;
-            if !(0..=1_000_000).contains(&width) {
-                return Err("Alinha width must be from 0 to 1000000".into());
-            }
+            let width = usize::try_from(integer_value(&values[1], "Alinha width")?)
+                .map_err(|_| "Alinha width exceeds addressable size".to_owned())?;
             let direction = values[2].text();
             if !direction.eq_ignore_ascii_case("DIR") && !direction.eq_ignore_ascii_case("ESQ") {
                 return Err("Alinha direction must be DIR or ESQ".into());
             }
-            let width = width as usize;
-            let mut characters: Vec<_> = text.chars().take(width).collect();
-            let padding = width.saturating_sub(characters.len());
-            if direction.eq_ignore_ascii_case("DIR") {
-                let mut aligned = vec![' '; padding];
-                aligned.append(&mut characters);
-                Ok(Value::Text(aligned.into_iter().collect()))
-            } else {
-                characters.extend(std::iter::repeat_n(' ', padding));
-                Ok(Value::Text(characters.into_iter().collect()))
+            let mut content = String::new();
+            for character in text.chars().take(width) {
+                content
+                    .try_reserve(character.len_utf8())
+                    .map_err(|cause| format!("Alinha cannot allocate text: {cause}"))?;
+                content.push(character);
             }
+            let padding = width.saturating_sub(content.chars().count());
+            let total_bytes = content
+                .len()
+                .checked_add(padding)
+                .ok_or_else(|| "Alinha output exceeds addressable size".to_owned())?;
+            let mut aligned = String::new();
+            aligned
+                .try_reserve_exact(total_bytes)
+                .map_err(|cause| format!("Alinha cannot allocate output: {cause}"))?;
+            if direction.eq_ignore_ascii_case("DIR") {
+                aligned.extend(std::iter::repeat_n(' ', padding));
+                aligned.push_str(&content);
+            } else {
+                aligned.push_str(&content);
+                aligned.extend(std::iter::repeat_n(' ', padding));
+            }
+            Ok(Value::Text(aligned))
         }
         "FORMATA" => {
             if values.len() != 2 {

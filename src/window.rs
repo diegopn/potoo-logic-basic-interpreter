@@ -2,7 +2,6 @@ use std::fmt;
 
 const ROWS: usize = 27;
 const COLUMNS: usize = 79;
-const MAX_CELLS: usize = 1_000_000;
 
 /// The default Logic Basic window, represented as a zero-based text grid.
 #[derive(Clone, Debug)]
@@ -48,8 +47,7 @@ impl Window {
             return Err("Janela resolution must be positive".into());
         }
         rows.checked_mul(columns)
-            .filter(|cells| *cells <= MAX_CELLS)
-            .ok_or_else(|| format!("Janela resolution cannot exceed {MAX_CELLS} cells"))?;
+            .ok_or_else(|| "Janela resolution exceeds addressable size".to_owned())?;
         let mut resized = Vec::new();
         resized
             .try_reserve_exact(rows)

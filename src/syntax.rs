@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{Error, MAX_ARRAY_ELEMENTS, Operation};
+use crate::{Error, Operation};
 
 pub(crate) struct Statement {
     pub(crate) line: usize,
@@ -249,7 +249,7 @@ pub(crate) fn parse(source: &str) -> Result<Vec<Statement>, Error> {
                             Some(Token::Digits(value)) => value
                                 .parse::<usize>()
                                 .ok()
-                                .filter(|value| (1..=MAX_ARRAY_ELEMENTS).contains(value))
+                                .filter(|value| *value >= 1)
                                 .ok_or_else(|| error("invalid array size".into()))?,
                             _ => return Err(error("expected array size".into())),
                         };
