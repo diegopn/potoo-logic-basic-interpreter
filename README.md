@@ -50,7 +50,68 @@ FimPrograma
 
 ### Install a release build
 
-Download the archive for your platform from [GitHub Releases](https://github.com/diegopn/potoo-logic-basic-interpreter/releases), extract it, and place the `potoo-logic-basic` executable somewhere on your `PATH`. Published binaries target Linux x86_64 GNU, Windows x86_64 MSVC, and macOS Intel x86_64. No arm64 binary is published.
+The v0.1.1 release provides native CLI packages for Linux x86_64 GNU, Windows x86_64 MSVC, Intel macOS x86_64, and Apple silicon macOS arm64. Download your system's archive and `SHA256SUMS` from the [latest GitHub release](https://github.com/diegopn/potoo-logic-basic-interpreter/releases/latest), then run the matching commands below from the folder containing both files. Each archive contains `potoo-logic-basic` (or `potoo-logic-basic.exe` on Windows) and the repository license. Use the `saudacao.lbc` example documented above, or replace it with your own program.
+
+#### Linux x86_64 GNU
+
+```sh
+set -euo pipefail
+archive="potoo-logic-basic-interpreter-v0.1.1-x86_64-unknown-linux-gnu.tar.gz"
+grep -F "  $archive" SHA256SUMS | sha256sum --check -
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "${archive%.tar.gz}/potoo-logic-basic" "$HOME/.local/bin/potoo-logic-basic"
+export PATH="$HOME/.local/bin:$PATH"
+potoo-logic-basic saudacao.lbc
+```
+
+To keep the command available in new Linux sessions, add the `export PATH="$HOME/.local/bin:$PATH"` line to your shell profile.
+
+#### Windows x86_64 MSVC (PowerShell)
+
+```powershell
+$archive = "potoo-logic-basic-interpreter-v0.1.1-x86_64-pc-windows-msvc.zip"
+$line = Get-Content .\SHA256SUMS | Where-Object { $_.EndsWith("  $archive") } | Select-Object -First 1
+if (-not $line) { throw "No SHA256SUMS entry found for $archive" }
+$expected = ($line -split '\s+')[0]
+$actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw "SHA-256 mismatch for $archive" }
+$installDir = Join-Path $env:USERPROFILE ".local\bin"
+New-Item -ItemType Directory -Force $installDir | Out-Null
+Expand-Archive -LiteralPath $archive -DestinationPath $installDir
+$exe = Join-Path $installDir "potoo-logic-basic-interpreter-v0.1.1-x86_64-pc-windows-msvc\potoo-logic-basic.exe"
+& $exe .\saudacao.lbc
+```
+
+To run `potoo-logic-basic.exe` from any folder, add `$env:USERPROFILE\.local\bin\potoo-logic-basic-interpreter-v0.1.1-x86_64-pc-windows-msvc` to your user `Path` environment variable in Windows Settings.
+
+#### Intel macOS x86_64
+
+```sh
+set -euo pipefail
+archive="potoo-logic-basic-interpreter-v0.1.1-x86_64-apple-darwin.tar.gz"
+grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "${archive%.tar.gz}/potoo-logic-basic" "$HOME/.local/bin/potoo-logic-basic"
+export PATH="$HOME/.local/bin:$PATH"
+potoo-logic-basic saudacao.lbc
+```
+
+#### Apple silicon macOS arm64
+
+```sh
+set -euo pipefail
+archive="potoo-logic-basic-interpreter-v0.1.1-aarch64-apple-darwin.tar.gz"
+grep -F "  $archive" SHA256SUMS | shasum -a 256 -c -
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 755 "${archive%.tar.gz}/potoo-logic-basic" "$HOME/.local/bin/potoo-logic-basic"
+export PATH="$HOME/.local/bin:$PATH"
+potoo-logic-basic saudacao.lbc
+```
+
+On macOS, add the `export PATH="$HOME/.local/bin:$PATH"` line to `~/.zprofile` to keep the command available in future sessions.
 
 ### Build and install from source
 
