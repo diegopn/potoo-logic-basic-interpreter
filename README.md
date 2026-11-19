@@ -149,6 +149,8 @@ The compatibility target is the documented Logic Basic 7.0 command language in t
 - The manual confirms the `.LBA` extension and how `AbreBD` chooses a filename, but does not describe its bytes or record encoding. Hosts receive logical records; physical `.LBA` interoperability is unverified.
 - The manual mentions `Entre` as a database-field argument but does not provide a callable signature or argument rules, so this function is not implemented.
 
+See [reference coverage](REFERENCE-COVERAGE.md) for the selected manual, implemented areas, and documented limits.
+
 ## Development
 
 Format, check, and test the project with:
